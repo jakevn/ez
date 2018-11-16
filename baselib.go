@@ -1,6 +1,9 @@
 package ez
 
-import "sort"
+import (
+	"log"
+	"sort"
+)
 
 func init() {
 	syms := make([]string, len(baselib))
@@ -192,6 +195,29 @@ var baselib = map[string][]Func{
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Bools[p.OpAddrs[p.pos+1]] || p.Bools[p.OpAddrs[p.pos+2]]
 				p.pos += 3
+			},
+		},
+	},
+	"Print": {
+		{
+			In: []baseType{btStr},
+			F: func(p *Bytecode) {
+				log.Println(p.Strs[p.OpAddrs[p.pos+1]])
+				p.pos += 1
+			},
+		},
+		{
+			In: []baseType{btInt},
+			F: func(p *Bytecode) {
+				log.Println(p.Ints[p.OpAddrs[p.pos+1]])
+				p.pos += 1
+			},
+		},
+		{
+			In: []baseType{btBool},
+			F: func(p *Bytecode) {
+				log.Println(p.Bools[p.OpAddrs[p.pos+1]])
+				p.pos += 1
 			},
 		},
 	},
