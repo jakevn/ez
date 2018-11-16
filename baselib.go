@@ -22,6 +22,13 @@ func init() {
 	}
 }
 
+type Func struct {
+	In   []baseType
+	Out  []baseType
+	F    func(*Bytecode)
+	addr int
+}
+
 const (
 	iopIntCopy = iota
 	iopStrCopy
@@ -31,15 +38,15 @@ const (
 var funcAddrs = []func(*Bytecode){
 	func(p *Bytecode) {
 		p.Ints[p.OpAddrs[p.pos+2]] = p.Ints[p.OpAddrs[p.pos+1]]
-		p.pos += 2
+		p.pos += 3
 	},
 	func(p *Bytecode) {
 		p.Strs[p.OpAddrs[p.pos+2]] = p.Strs[p.OpAddrs[p.pos+1]]
-		p.pos += 2
+		p.pos += 3
 	},
 	func(p *Bytecode) {
 		p.Bools[p.OpAddrs[p.pos+2]] = p.Bools[p.OpAddrs[p.pos+1]]
-		p.pos += 2
+		p.pos += 3
 	},
 }
 
@@ -50,7 +57,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btInt},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] + p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 		{
@@ -58,7 +65,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btStr},
 			F: func(p *Bytecode) {
 				p.Strs[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] + p.Strs[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -68,7 +75,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btInt},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] * p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -78,7 +85,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btInt},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] % p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -88,7 +95,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btInt},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] / p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -98,7 +105,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btInt},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] - p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -108,7 +115,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] > p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -118,7 +125,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] < p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -128,7 +135,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] >= p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -138,7 +145,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] <= p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -148,7 +155,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] == p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 		{
@@ -156,7 +163,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] == p.Strs[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -166,7 +173,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] != p.Ints[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 		{
@@ -174,7 +181,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] != p.Strs[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -184,7 +191,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Bools[p.OpAddrs[p.pos+1]] && p.Bools[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -194,7 +201,7 @@ var baselib = map[string][]Func{
 			Out: []baseType{btBool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Bools[p.OpAddrs[p.pos+1]] || p.Bools[p.OpAddrs[p.pos+2]]
-				p.pos += 3
+				p.pos += 4
 			},
 		},
 	},
@@ -203,21 +210,21 @@ var baselib = map[string][]Func{
 			In: []baseType{btStr},
 			F: func(p *Bytecode) {
 				log.Println(p.Strs[p.OpAddrs[p.pos+1]])
-				p.pos += 1
+				p.pos += 2
 			},
 		},
 		{
 			In: []baseType{btInt},
 			F: func(p *Bytecode) {
 				log.Println(p.Ints[p.OpAddrs[p.pos+1]])
-				p.pos += 1
+				p.pos += 2
 			},
 		},
 		{
 			In: []baseType{btBool},
 			F: func(p *Bytecode) {
 				log.Println(p.Bools[p.OpAddrs[p.pos+1]])
-				p.pos += 1
+				p.pos += 2
 			},
 		},
 	},
