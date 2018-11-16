@@ -9,20 +9,35 @@ import (
 	"unicode"
 )
 
+var (
+	MaxLineLen = 120
+	MaxLines   = 800
+)
+
 type baseType int
 
 const (
-	btInt baseType = iota
+	btUndecided baseType = iota
+	btInt
 	btStr
 	btBool
 	btAny
 )
 
 type Parser struct {
-	bc         Bytecode
-	IntIDAddr  map[string]int
-	StrIDAddr  map[string]int
-	BoolIDAddr map[string]int
+	bc                 Bytecode
+	IntIDAddr          map[string]int
+	StrIDAddr          map[string]int
+	BoolIDAddr         map[string]int
+	UndecidedIDInfo    map[string]Undecided
+	InParams           map[string]Param
+	OutParams          map[string]Param
+	undecidedAddrIndex int
+}
+
+type Undecided struct {
+	PlaceholderAddr int
+	Dependents      []string
 }
 
 type Func struct {
@@ -32,19 +47,42 @@ type Func struct {
 	addr int
 }
 
+type Param struct {
+	Pos  int
+	Type baseType
+	Addr int
+}
+
 func Parse(reader io.Reader) (Bytecode, error) {
+	p := &Parser{
+		IntIDAddr:          map[string]int{},
+		StrIDAddr:          map[string]int{},
+		BoolIDAddr:         map[string]int{},
+		InParams:           map[string]Param{},
+		UndecidedIDInfo:    map[string]Undecided{},
+		undecidedAddrIndex: -100,
+	}
+	return p.parseInternal(reader)
+}
+
+func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Split(bufio.ScanLines)
 
-	p := &Parser{
-		IntIDAddr:  map[string]int{},
-		StrIDAddr:  map[string]int{},
-		BoolIDAddr: map[string]int{},
-	}
 	var line int
-
+	var inputParamsDefined bool
 	for scanner.Scan() {
 		line += 1
+		if line > MaxLines {
+			return p.bc, errors.New("exceeded max number of lines: " + strconv.Itoa(MaxLines))
+		}
+		lineText := scanner.Text()
+		if len(lineText) == 0 || lineText[0] == '#' {
+			continue
+		}
+		if len(lineText) > MaxLineLen {
+			return p.bc, parsingErr(line, "exceeded max line length: "+strconv.Itoa(MaxLineLen))
+		}
 
 		var assgns []string
 		var buildingAssgns bool
@@ -54,7 +92,7 @@ func Parse(reader io.Reader) (Bytecode, error) {
 		var buildStr string
 		var buildingStr bool
 
-		fields := strings.Fields(scanner.Text())
+		fields := strings.Fields(lineText)
 		for i, field := range fields {
 			if strings.HasPrefix(field, "#") {
 				break
@@ -109,9 +147,16 @@ func Parse(reader io.Reader) (Bytecode, error) {
 				}
 				if targetFound {
 					if targetTyp != typ {
-						return p.bc, parsingErr(line, "cannot assign '"+args[0]+"' to '"+assgns[0]+"' - type mismatch")
+						if typ == btUndecided {
+							targetAddr = p.undecidedIsDecided(args[0], targetTyp)
+						} else {
+							return p.bc, parsingErr(line, "cannot assign '"+args[0]+"' to '"+assgns[0]+"' - type mismatch")
+						}
 					}
 				} else {
+					if typ == btUndecided {
+						p.undecidedAddDependency(args[0], assgns[0])
+					}
 					targetAddr = p.newAlloc(assgns[0], typ)
 				}
 				p.bc.OpAddrs = append(p.bc.OpAddrs, p.copyFuncInstructionForType(typ), addr, targetAddr)
@@ -129,10 +174,23 @@ func Parse(reader io.Reader) (Bytecode, error) {
 					p.newAllocInitialize(assgns[0], args[0])
 				}
 			}
+		case len(assgns) > 0 && len(args) == 0 && op == "":
+			if inputParamsDefined {
+				return p.bc, parsingErr(line, "expected assignment or expression following identifier")
+			}
+			for i, inParamID := range assgns {
+				if _, ok := p.InParams[inParamID]; ok {
+					return p.bc, parsingErr(line, "in parameter identifiers must be unique - duplicate: '"+inParamID+"'")
+				}
+				p.InParams[inParamID] = Param{
+					Pos: i,
+				}
+			}
+			inputParamsDefined = true
 		case op != "":
 			funcs, ok := baselib[op]
 			if !ok {
-				panic("shouldn't be able to get here as op is already checked for existence during parsing: " + op)
+				return p.bc, parsingErr(line, "impossible made possible - previously existing op no longer exists: "+op)
 			}
 			var argTypes []baseType
 			var argAddrs []int
@@ -145,10 +203,7 @@ func Parse(reader io.Reader) (Bytecode, error) {
 					argTypes = append(argTypes, typ)
 					argAddrs = append(argAddrs, addr)
 				} else {
-					typ, addr, found := p.typeAndAddrOfID(arg)
-					if !found {
-						addr, typ = p.newAllocInitialize(arg, arg)
-					}
+					addr, typ := p.newAllocInitialize(arg, arg)
 					argTypes = append(argTypes, typ)
 					argAddrs = append(argAddrs, addr)
 				}
@@ -171,7 +226,7 @@ func Parse(reader io.Reader) (Bytecode, error) {
 				}
 				inTypesMatch := true
 				for i, inType := range fun.In {
-					if inType == btAny {
+					if inType == btUndecided {
 						continue
 					}
 					if inType != argTypes[i] {
@@ -184,7 +239,7 @@ func Parse(reader io.Reader) (Bytecode, error) {
 				}
 				outTypesMatch := true
 				for i, outType := range fun.Out {
-					if assgnTypes[i] == btAny {
+					if assgnTypes[i] == btUndecided || assgnTypes[i] == btAny {
 						continue
 					}
 					if outType != assgnTypes[i] {
@@ -196,10 +251,12 @@ func Parse(reader io.Reader) (Bytecode, error) {
 					continue
 				}
 				for i, outType := range fun.Out {
-					if assgnTypes[i] != btAny {
-						continue
+					switch assgnTypes[i] {
+					case btAny:
+						assgnAddrs[i] = p.newAlloc(assgns[i], outType)
+					case btUndecided:
+						assgnAddrs[i] = p.undecidedIsDecided(assgns[i], outType)
 					}
-					assgnAddrs[i] = p.newAlloc(assgns[i], outType)
 				}
 				foundFunc = true
 				p.bc.OpAddrs = append(p.bc.OpAddrs, fun.addr)
@@ -213,6 +270,48 @@ func Parse(reader io.Reader) (Bytecode, error) {
 		}
 	}
 	return p.bc, nil
+}
+
+func (p *Parser) newOrGetUndecidedAddr(id string) int {
+	undecided, ok := p.UndecidedIDInfo[id]
+	if !ok {
+		p.undecidedAddrIndex -= 1
+		p.UndecidedIDInfo[id] = Undecided{
+			PlaceholderAddr: p.undecidedAddrIndex,
+		}
+		return p.undecidedAddrIndex
+	}
+	return undecided.PlaceholderAddr
+}
+// TODO: investigate stopping VM from diff goroutine by setting negative position index repeatedly until panic is caught in defer
+
+func (p *Parser) undecidedAddDependency(id, dependentId string) {
+	undecided := p.UndecidedIDInfo[id]
+	undecided.Dependents = append(undecided.Dependents, dependentId)
+	p.UndecidedIDInfo[id] = undecided
+}
+
+func (p *Parser) undecidedIsDecided(id string, typ baseType) int {
+	undecided, ok := p.UndecidedIDInfo[id]
+	if !ok {
+		return -1
+	}
+	delete(p.UndecidedIDInfo, id)
+	for _, dep := range undecided.Dependents {
+		p.undecidedIsDecided(dep, typ)
+	}
+	newAddr := p.newAlloc(id, typ)
+	if inputParam, ok := p.InParams[id]; ok {
+		inputParam.Type = typ
+		inputParam.Addr = newAddr
+		p.InParams[id] = inputParam
+	}
+	for i, opAddr := range p.bc.OpAddrs {
+		if undecided.PlaceholderAddr == opAddr {
+			p.bc.OpAddrs[i] = newAddr
+		}
+	}
+	return newAddr
 }
 
 func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
@@ -242,6 +341,8 @@ func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
 	return addr, typ
 }
 
+// TODO: handle copy instructions for undecided type
+
 func (p *Parser) copyFuncInstructionForType(typ baseType) int {
 	switch typ {
 	case btInt:
@@ -269,6 +370,8 @@ func (p *Parser) newAlloc(id string, typ baseType) int {
 		addr = len(p.bc.Bools)
 		p.BoolIDAddr[id] = len(p.bc.Bools)
 		p.bc.Bools = append(p.bc.Bools, false)
+	case btUndecided:
+		addr = p.newOrGetUndecidedAddr(id)
 	}
 	return addr
 }
@@ -298,7 +401,10 @@ func (p *Parser) typeAndAddrOfID(id string) (baseType, int, bool) {
 			return typ, addr, ok
 		}
 	}
-	return btAny, -1, false
+	if undecided, ok := p.UndecidedIDInfo[id]; ok {
+		return btUndecided, undecided.PlaceholderAddr, true
+	}
+	return btUndecided, -1, false
 }
 
 func rawToType(raw string) baseType {
