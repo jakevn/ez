@@ -287,8 +287,6 @@ func (p *Parser) newOrGetUndecidedAddr(id string) int {
 	return undecided.Addresses[len(undecided.Addresses)-1].Index
 }
 
-// TODO: investigate stopping VM from diff goroutine by setting negative position index repeatedly until panic is caught in defer
-
 func (p *Parser) undecidedAddDependency(id, dependentId string) {
 	dependents, ok := p.UndecidedDependents[id]
 	if !ok {
@@ -355,7 +353,6 @@ func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
 }
 
 // TODO: handle copy instructions for undecided type
-
 func (p *Parser) copyFuncInstructionForType(typ baseType) int {
 	switch typ {
 	case btInt:
