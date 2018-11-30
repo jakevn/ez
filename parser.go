@@ -22,6 +22,7 @@ const (
 	btStr
 	btBool
 	btAny
+	btAddr
 )
 
 type Parser struct {
@@ -89,6 +90,13 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 		fields := strings.Fields(lineText)
 		for i, field := range fields {
 			if strings.HasPrefix(field, "#") {
+				break
+			}
+			if i == 0 && isLabel(field) {
+				p.newAlloc(field, btAddr)
+				if len(fields) > 1 && !strings.HasPrefix(fields[1], "#") {
+					return p.bc, p.parsingErr("labels can only be followed by a comment")
+				}
 				break
 			}
 			switch {
@@ -379,6 +387,8 @@ func (p *Parser) newAlloc(id string, typ baseType) int {
 		p.bc.Bools = append(p.bc.Bools, false)
 	case btUndecided:
 		addr = p.newOrGetUndecidedAddr(id) // TODO
+	case btAddr:
+		addr = len(p.bc.OpAddrs)
 	}
 	p.IDInfo[id] = Info{
 		Type:      typ,
@@ -453,6 +463,10 @@ func isIdentifier(str string) bool {
 		}
 	}
 	return true
+}
+
+func isLabel(str string) bool {
+	return str[0] == '~' && len(str) > 1 && isIdentifier(str[1:])
 }
 
 func isString(raw string) bool {

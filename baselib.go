@@ -23,10 +23,12 @@ func init() {
 }
 
 type Func struct {
-	In   []baseType
-	Out  []baseType
-	F    func(*Bytecode)
-	addr int
+	In          []baseType
+	Out         []baseType
+	F           func(*Bytecode)
+	AddJumpAddr bool
+	CompileTime bool
+	addr        int
 }
 
 const (
@@ -225,6 +227,25 @@ var baselib = map[string][]Func{
 			F: func(p *Bytecode) {
 				log.Println(p.Bools[p.OpAddrs[p.pos+1]])
 				p.pos += 2
+			},
+		},
+	},
+	"If": {
+		{
+			In: []baseType{btBool},
+			F: func(p *Bytecode) {
+				if p.Bools[p.OpAddrs[p.pos+1]] {
+					p.pos += 3
+				} else {
+					p.pos += 3 + p.OpAddrs[p.pos+2]
+				}
+			},
+		},
+	},
+	"Goto": {
+		{
+			F: func(p *Bytecode) {
+				p.pos += 2 + p.OpAddrs[p.pos+1]
 			},
 		},
 	},
