@@ -13,7 +13,15 @@ func init() {
 	sort.Strings(syms)
 	for _, sym := range syms {
 		symFuncs := baselib[sym]
+		if len(symFuncs) == 0 {
+			panic("symbol with no associated functions: " + sym)
+		}
+		paramInCount := len(symFuncs[0].In)
+		paramOutCount := len(symFuncs[0].Out)
 		for i, fun := range symFuncs {
+			if len(fun.In) != paramInCount || len(fun.Out) != paramOutCount {
+				panic("functions associated with symbols must have identical parameter counts. invalid: " + sym)
+			}
 			fun.addr = len(funcAddrs)
 			funcAddrs = append(funcAddrs, fun.F)
 			symFuncs[i] = fun
@@ -27,7 +35,6 @@ type Func struct {
 	Out         []baseType
 	F           func(*Bytecode)
 	AddJumpAddr bool
-	CompileTime bool
 	addr        int
 }
 
@@ -245,7 +252,7 @@ var baselib = map[string][]Func{
 	"Goto": {
 		{
 			F: func(p *Bytecode) {
-				p.pos += 2 + p.OpAddrs[p.pos+1]
+				p.pos = p.OpAddrs[p.pos+1]
 			},
 		},
 	},

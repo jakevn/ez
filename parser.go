@@ -33,6 +33,7 @@ type Parser struct {
 	OutParams           map[string]Param
 	undecidedAddrIndex  int
 	line                uint16
+	ctx                 context
 }
 
 type Info struct {
@@ -51,6 +52,15 @@ type Param struct {
 	Addr int
 }
 
+type context struct {
+	assgns         []string
+	buildingAssgns bool
+	args           []string
+	op             string
+	buildStr       string
+	buildingStr    bool
+}
+
 func Parse(reader io.Reader) (Bytecode, error) {
 	p := &Parser{
 		IDInfo:              map[string]Info{},
@@ -65,7 +75,6 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Split(bufio.ScanLines)
 
-	var inputParamsDefined bool
 	for scanner.Scan() {
 		p.line += 1
 		if p.line > MaxLines {
@@ -78,15 +87,7 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 		if len(lineText) > MaxLineLen {
 			return p.bc, p.parsingErr("exceeded max line length: " + strconv.Itoa(MaxLineLen))
 		}
-
-		var assgns []string
-		var buildingAssgns bool
-		var args []string
-		var op string
-
-		var buildStr string
-		var buildingStr bool
-
+		var baseCtx context
 		fields := strings.Fields(lineText)
 		for i, field := range fields {
 			if strings.HasPrefix(field, "#") {
@@ -100,184 +101,188 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 				break
 			}
 			switch {
-			case buildingStr:
-				buildStr += " " + field
+			case baseCtx.buildingStr:
+				baseCtx.buildStr += " " + field
 				if isStringEnd(field) {
-					buildingStr = false
-					args = append(args, buildStr)
+					baseCtx.buildingStr = false
+					baseCtx.args = append(baseCtx.args, baseCtx.buildStr)
 				}
 			case i == 0 && isIdentifier(field):
-				assgns = append(assgns, field)
-				buildingAssgns = true
+				baseCtx.assgns = append(baseCtx.assgns, field)
+				baseCtx.buildingAssgns = true
 			case field == "=":
-				if !buildingAssgns {
+				if !baseCtx.buildingAssgns {
 					return p.bc, p.parsingErr("expected one or more identifiers to left of assigment operator")
 				}
-				buildingAssgns = false
+				baseCtx.buildingAssgns = false
 			case isFuncCall(field):
-				op = field
+				baseCtx.op = field
 			case isStringStart(field):
 				if len(field) >= 2 && isStringEnd(field) {
-					args = append(args, field)
+					baseCtx.args = append(baseCtx.args, field)
 				} else {
-					buildStr = field
-					buildingStr = true
+					baseCtx.buildStr = field
+					baseCtx.buildingStr = true
 				}
 			case isIdentifier(field) || isBool(field) || isInt(field):
-				if buildingAssgns {
+				if baseCtx.buildingAssgns {
 					if !isIdentifier(field) {
 						return p.bc, p.parsingErr("expected another identifier or an assignment symbol '=', got '" + field + "'")
 					}
-					assgns = append(assgns, field)
+					baseCtx.assgns = append(baseCtx.assgns, field)
 				} else {
-					args = append(args, field)
+					baseCtx.args = append(baseCtx.args, field)
 				}
 			default:
 				return p.bc, p.parsingErr("unknown symbol: " + field)
 			}
 		}
-		switch {
-		case op == "" && len(args) > 0 && len(assgns) > 0:
-			if len(args) > 1 || len(assgns) > 1 {
-				return p.bc, p.parsingErr("can only assign one expression to one argument")
-			}
-			targetTyp, targetAddr, targetFound := p.typeAndAddrOfID(assgns[0])
-			if isIdentifier(args[0]) {
-				typ, addr, found := p.typeAndAddrOfID(args[0])
-				if !found {
-					return p.bc, p.parsingErr("reference to uninitialized identifier: " + args[0])
-				}
-				if targetFound {
-					if targetTyp != typ {
-						if typ == btUndecided {
-							targetAddr = p.undecidedIsDecided(args[0], targetTyp)
-						} else {
-							return p.bc, p.parsingErr("cannot assign '" + args[0] + "' to '" + assgns[0] + "' - type mismatch")
-						}
-					}
-				} else {
-					if typ == btUndecided {
-						p.undecidedAddDependency(args[0], assgns[0])
-					}
-					targetAddr = p.newAlloc(assgns[0], typ)
-				}
-				p.bc.OpAddrs = append(p.bc.OpAddrs, p.copyFuncInstructionForType(typ), addr, targetAddr)
-			} else {
-				if targetFound {
-					if targetTyp != rawToType(args[0]) {
-						return p.bc, p.parsingErr("cannot assign '" + args[0] + "' to '" + assgns[0] + "' - type mismatch")
-					}
-					_, addr, found := p.typeAndAddrOfID(args[0])
-					if !found {
-						addr, _ = p.newAllocInitialize(args[0], args[0])
-					}
-					p.bc.OpAddrs = append(p.bc.OpAddrs, p.copyFuncInstructionForType(targetTyp), addr, targetAddr)
-				} else {
-					p.newAllocInitialize(assgns[0], args[0])
-				}
-			}
-		case len(assgns) > 0 && len(args) == 0 && op == "":
-			if inputParamsDefined {
-				return p.bc, p.parsingErr("expected assignment or expression following identifier")
-			}
-			for i, inParamID := range assgns {
-				if _, ok := p.InParams[inParamID]; ok {
-					return p.bc, p.parsingErr("in parameter identifiers must be unique - duplicate: '" + inParamID + "'")
-				}
-				p.InParams[inParamID] = Param{
-					Pos: i,
-				}
-			}
-			inputParamsDefined = true
-		case op != "":
-			funcs, ok := baselib[op]
-			if !ok {
-				return p.bc, p.parsingErr("impossible made possible - previously existing op no longer exists: " + op)
-			}
-			var argTypes []baseType
-			var argAddrs []int
-			for _, arg := range args {
-				if isIdentifier(arg) {
-					typ, addr, found := p.typeAndAddrOfID(arg)
-					if !found {
-						return p.bc, p.parsingErr("reference to uninitialized identifier: " + arg)
-					}
-					argTypes = append(argTypes, typ)
-					argAddrs = append(argAddrs, addr)
-				} else {
-					addr, typ := p.newAllocInitialize(arg, arg)
-					argTypes = append(argTypes, typ)
-					argAddrs = append(argAddrs, addr)
-				}
-			}
-			var assgnTypes []baseType
-			var assgnAddrs []int
-			for _, assgn := range assgns {
-				typ, addr, found := p.typeAndAddrOfID(assgn)
-				if !found {
-					typ = btAny
-					addr = -1
-				}
-				assgnTypes = append(assgnTypes, typ)
-				assgnAddrs = append(assgnAddrs, addr)
-			}
-			foundFunc := false
-			for _, fun := range funcs {
-				if len(fun.In) != len(args) || len(fun.Out) != len(assgns) {
-					continue
-				}
-				inTypesMatch := true
-				for i, inType := range fun.In {
-					if inType == btUndecided {
-						continue
-					}
-					if inType != argTypes[i] {
-						inTypesMatch = false
-						break
-					}
-				}
-				if !inTypesMatch {
-					continue
-				}
-				outTypesMatch := true
-				for i, outType := range fun.Out {
-					if assgnTypes[i] == btUndecided || assgnTypes[i] == btAny {
-						continue
-					}
-					if outType != assgnTypes[i] {
-						outTypesMatch = false
-						break
-					}
-				}
-				if !outTypesMatch {
-					continue
-				}
-				for i, outType := range fun.Out {
-					switch assgnTypes[i] {
-					case btAny:
-						assgnAddrs[i] = p.newAlloc(assgns[i], outType)
-					case btUndecided:
-						assgnAddrs[i] = p.undecidedIsDecided(assgns[i], outType)
-					}
-				}
-				for i, inType := range fun.In {
-					if argTypes[i] != btUndecided {
-						continue
-					}
-					argAddrs[i] = p.undecidedIsDecided(args[i], inType)
-				}
-				foundFunc = true
-				p.bc.OpAddrs = append(p.bc.OpAddrs, fun.addr)
-				p.bc.OpAddrs = append(p.bc.OpAddrs, argAddrs...)
-				p.bc.OpAddrs = append(p.bc.OpAddrs, assgnAddrs...)
-				break
-			}
-			if !foundFunc {
-				return p.bc, p.parsingErr("no function signature named '" + op + "' to handle types/quantity of arguments or assignments")
-			}
-		}
+
 	}
 	return p.bc, nil
+}
+
+func (p *Parser) evalCtx(ctx context) error {
+	switch {
+	case ctx.op == "" && len(ctx.args) > 0 && len(ctx.assgns) > 0:
+		if len(ctx.args) > 1 || len(ctx.assgns) > 1 {
+			return p.parsingErr("can only assign one expression to one argument")
+		}
+		targetTyp, targetAddr, targetFound := p.typeAndAddrOfID(ctx.assgns[0])
+		if isIdentifier(ctx.args[0]) {
+			typ, addr, found := p.typeAndAddrOfID(ctx.args[0])
+			if !found {
+				return p.parsingErr("reference to uninitialized identifier: " + ctx.args[0])
+			}
+			if targetFound {
+				if targetTyp != typ {
+					if typ == btUndecided {
+						targetAddr = p.undecidedIsDecided(ctx.args[0], targetTyp)
+					} else {
+						return p.parsingErr("cannot assign '" + ctx.args[0] + "' to '" + ctx.assgns[0] + "' - type mismatch")
+					}
+				}
+			} else {
+				if typ == btUndecided {
+					p.undecidedAddDependency(ctx.args[0], ctx.assgns[0])
+				}
+				targetAddr = p.newAlloc(ctx.assgns[0], typ)
+			}
+			p.bc.OpAddrs = append(p.bc.OpAddrs, p.copyFuncInstructionForType(typ), addr, targetAddr)
+		} else {
+			if targetFound {
+				if targetTyp != rawToType(ctx.args[0]) {
+					return p.parsingErr("cannot assign '" + ctx.args[0] + "' to '" + ctx.assgns[0] + "' - type mismatch")
+				}
+				_, addr, found := p.typeAndAddrOfID(ctx.args[0])
+				if !found {
+					addr, _ = p.newAllocInitialize(ctx.args[0], ctx.args[0])
+				}
+				p.bc.OpAddrs = append(p.bc.OpAddrs, p.copyFuncInstructionForType(targetTyp), addr, targetAddr)
+			} else {
+				p.newAllocInitialize(ctx.assgns[0], ctx.args[0])
+			}
+		}
+	case len(ctx.assgns) > 0 && len(ctx.args) == 0 && ctx.op == "":
+		if len(p.InParams) > 0 {
+			return p.parsingErr("expected assignment or expression following identifier")
+		}
+		for i, inParamID := range ctx.assgns {
+			if _, ok := p.InParams[inParamID]; ok {
+				return p.parsingErr("in parameter identifiers must be unique - duplicate: '" + inParamID + "'")
+			}
+			p.InParams[inParamID] = Param{
+				Pos: i,
+			}
+		}
+	case ctx.op != "":
+		funcs, ok := baselib[ctx.op]
+		if !ok {
+			return p.parsingErr("impossible made possible - previously existing op no longer exists: " + ctx.op)
+		}
+		var argTypes []baseType
+		var argAddrs []int
+		for _, arg := range ctx.args {
+			if isIdentifier(arg) {
+				typ, addr, found := p.typeAndAddrOfID(arg)
+				if !found {
+					return p.parsingErr("reference to uninitialized identifier: " + arg)
+				}
+				argTypes = append(argTypes, typ)
+				argAddrs = append(argAddrs, addr)
+			} else {
+				addr, typ := p.newAllocInitialize(arg, arg)
+				argTypes = append(argTypes, typ)
+				argAddrs = append(argAddrs, addr)
+			}
+		}
+		var assgnTypes []baseType
+		var assgnAddrs []int
+		for _, assgn := range ctx.assgns {
+			typ, addr, found := p.typeAndAddrOfID(assgn)
+			if !found {
+				typ = btAny
+				addr = -1
+			}
+			assgnTypes = append(assgnTypes, typ)
+			assgnAddrs = append(assgnAddrs, addr)
+		}
+		foundFunc := false
+		for _, fun := range funcs {
+			if len(fun.In) != len(ctx.args) || len(fun.Out) != len(ctx.assgns) {
+				continue
+			}
+			inTypesMatch := true
+			for i, inType := range fun.In {
+				if inType == btUndecided {
+					continue
+				}
+				if inType != argTypes[i] {
+					inTypesMatch = false
+					break
+				}
+			}
+			if !inTypesMatch {
+				continue
+			}
+			outTypesMatch := true
+			for i, outType := range fun.Out {
+				if assgnTypes[i] == btUndecided || assgnTypes[i] == btAny {
+					continue
+				}
+				if outType != assgnTypes[i] {
+					outTypesMatch = false
+					break
+				}
+			}
+			if !outTypesMatch {
+				continue
+			}
+			for i, outType := range fun.Out {
+				switch assgnTypes[i] {
+				case btAny:
+					assgnAddrs[i] = p.newAlloc(ctx.assgns[i], outType)
+				case btUndecided:
+					assgnAddrs[i] = p.undecidedIsDecided(ctx.assgns[i], outType)
+				}
+			}
+			for i, inType := range fun.In {
+				if argTypes[i] != btUndecided {
+					continue
+				}
+				argAddrs[i] = p.undecidedIsDecided(ctx.args[i], inType)
+			}
+			foundFunc = true
+			p.bc.OpAddrs = append(p.bc.OpAddrs, fun.addr)
+			p.bc.OpAddrs = append(p.bc.OpAddrs, argAddrs...)
+			p.bc.OpAddrs = append(p.bc.OpAddrs, assgnAddrs...)
+			break
+		}
+		if !foundFunc {
+			return p.parsingErr("no function signature named '" + ctx.op + "' to handle types/quantity of arguments or assignments")
+		}
+	}
+	return nil
 }
 
 func (p *Parser) newOrGetUndecidedAddr(id string) int {
