@@ -17,12 +17,12 @@ var (
 type baseType int
 
 const (
-	btUndecided baseType = iota
-	btInt
-	btStr
-	btBool
-	btAny
-	btAddr
+	Und baseType = iota
+	Int
+	Str
+	Bool
+	Any
+	Addr
 )
 
 type Parser struct {
@@ -33,7 +33,6 @@ type Parser struct {
 	OutParams           map[string]Param
 	undecidedAddrIndex  int
 	line                uint16
-	ctx                 context
 }
 
 type Info struct {
@@ -52,13 +51,10 @@ type Param struct {
 	Addr int
 }
 
-type context struct {
-	assgns         []string
-	buildingAssgns bool
-	args           []string
-	op             string
-	buildStr       string
-	buildingStr    bool
+type expressionCtx struct {
+	assgns []string
+	args   []string
+	op     string
 }
 
 func Parse(reader io.Reader) (Bytecode, error) {
@@ -87,62 +83,82 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 		if len(lineText) > MaxLineLen {
 			return p.bc, p.parsingErr("exceeded max line length: " + strconv.Itoa(MaxLineLen))
 		}
-		var baseCtx context
+
+		var baseExprCtx expressionCtx
+		var buildStr string
+		var buildingStr bool
+		var buildingAssgns bool
+		var injectEndAddrAt int
 		fields := strings.Fields(lineText)
 		for i, field := range fields {
 			if strings.HasPrefix(field, "#") {
 				break
 			}
 			if i == 0 && isLabel(field) {
-				p.newAlloc(field, btAddr)
+				p.newAlloc(field, Addr)
 				if len(fields) > 1 && !strings.HasPrefix(fields[1], "#") {
 					return p.bc, p.parsingErr("labels can only be followed by a comment")
 				}
 				break
 			}
 			switch {
-			case baseCtx.buildingStr:
-				baseCtx.buildStr += " " + field
+			case buildingStr:
+				buildStr += " " + field
 				if isStringEnd(field) {
-					baseCtx.buildingStr = false
-					baseCtx.args = append(baseCtx.args, baseCtx.buildStr)
+					buildingStr = false
+					baseExprCtx.args = append(baseExprCtx.args, buildStr)
 				}
 			case i == 0 && isIdentifier(field):
-				baseCtx.assgns = append(baseCtx.assgns, field)
-				baseCtx.buildingAssgns = true
+				baseExprCtx.assgns = append(baseExprCtx.assgns, field)
+				buildingAssgns = true
 			case field == "=":
-				if !baseCtx.buildingAssgns {
+				if !buildingAssgns {
 					return p.bc, p.parsingErr("expected one or more identifiers to left of assigment operator")
 				}
-				baseCtx.buildingAssgns = false
+				buildingAssgns = false
 			case isFuncCall(field):
-				baseCtx.op = field
+				baseExprCtx.op = field
 			case isStringStart(field):
 				if len(field) >= 2 && isStringEnd(field) {
-					baseCtx.args = append(baseCtx.args, field)
+					baseExprCtx.args = append(baseExprCtx.args, field)
 				} else {
-					baseCtx.buildStr = field
-					baseCtx.buildingStr = true
+					buildStr = field
+					buildingStr = true
 				}
-			case isIdentifier(field) || isBool(field) || isInt(field):
-				if baseCtx.buildingAssgns {
-					if !isIdentifier(field) {
+			case isIdentifier(field) || isBool(field) || isInt(field) || isLabel(field):
+				if buildingAssgns {
+					if !isIdentifier(field) && !isLabel(field) {
 						return p.bc, p.parsingErr("expected another identifier or an assignment symbol '=', got '" + field + "'")
 					}
-					baseCtx.assgns = append(baseCtx.assgns, field)
+					baseExprCtx.assgns = append(baseExprCtx.assgns, field)
 				} else {
-					baseCtx.args = append(baseCtx.args, field)
+					baseExprCtx.args = append(baseExprCtx.args, field)
+				}
+				if baseExprCtx.op == "If" {
+					if err := p.compileExpression(baseExprCtx); err != nil {
+						return p.bc, err
+					}
+					injectEndAddrAt = len(p.bc.OpAddrs)
+					p.bc.OpAddrs = append(p.bc.OpAddrs, 0)
+					baseExprCtx = expressionCtx{}
+					buildingAssgns = false
 				}
 			default:
 				return p.bc, p.parsingErr("unknown symbol: " + field)
 			}
 		}
-
+		if err := p.compileExpression(baseExprCtx); err != nil {
+			return p.bc, err
+		}
+		if injectEndAddrAt != 0 {
+			p.bc.OpAddrs[injectEndAddrAt] = len(p.bc.OpAddrs)
+			injectEndAddrAt = 0
+		}
 	}
 	return p.bc, nil
 }
 
-func (p *Parser) evalCtx(ctx context) error {
+func (p *Parser) compileExpression(ctx expressionCtx) error {
 	switch {
 	case ctx.op == "" && len(ctx.args) > 0 && len(ctx.assgns) > 0:
 		if len(ctx.args) > 1 || len(ctx.assgns) > 1 {
@@ -156,14 +172,14 @@ func (p *Parser) evalCtx(ctx context) error {
 			}
 			if targetFound {
 				if targetTyp != typ {
-					if typ == btUndecided {
+					if typ == Und {
 						targetAddr = p.undecidedIsDecided(ctx.args[0], targetTyp)
 					} else {
 						return p.parsingErr("cannot assign '" + ctx.args[0] + "' to '" + ctx.assgns[0] + "' - type mismatch")
 					}
 				}
 			} else {
-				if typ == btUndecided {
+				if typ == Und {
 					p.undecidedAddDependency(ctx.args[0], ctx.assgns[0])
 				}
 				targetAddr = p.newAlloc(ctx.assgns[0], typ)
@@ -203,7 +219,7 @@ func (p *Parser) evalCtx(ctx context) error {
 		var argTypes []baseType
 		var argAddrs []int
 		for _, arg := range ctx.args {
-			if isIdentifier(arg) {
+			if isIdentifier(arg) || isLabel(arg) {
 				typ, addr, found := p.typeAndAddrOfID(arg)
 				if !found {
 					return p.parsingErr("reference to uninitialized identifier: " + arg)
@@ -221,7 +237,7 @@ func (p *Parser) evalCtx(ctx context) error {
 		for _, assgn := range ctx.assgns {
 			typ, addr, found := p.typeAndAddrOfID(assgn)
 			if !found {
-				typ = btAny
+				typ = Any
 				addr = -1
 			}
 			assgnTypes = append(assgnTypes, typ)
@@ -230,11 +246,11 @@ func (p *Parser) evalCtx(ctx context) error {
 		foundFunc := false
 		for _, fun := range funcs {
 			if len(fun.In) != len(ctx.args) || len(fun.Out) != len(ctx.assgns) {
-				continue
+				continue // TODO: overlapping func names can no longer have diff param/return len
 			}
 			inTypesMatch := true
 			for i, inType := range fun.In {
-				if inType == btUndecided {
+				if inType == Und {
 					continue
 				}
 				if inType != argTypes[i] {
@@ -247,7 +263,7 @@ func (p *Parser) evalCtx(ctx context) error {
 			}
 			outTypesMatch := true
 			for i, outType := range fun.Out {
-				if assgnTypes[i] == btUndecided || assgnTypes[i] == btAny {
+				if assgnTypes[i] == Und || assgnTypes[i] == Any {
 					continue
 				}
 				if outType != assgnTypes[i] {
@@ -260,14 +276,14 @@ func (p *Parser) evalCtx(ctx context) error {
 			}
 			for i, outType := range fun.Out {
 				switch assgnTypes[i] {
-				case btAny:
+				case Any:
 					assgnAddrs[i] = p.newAlloc(ctx.assgns[i], outType)
-				case btUndecided:
+				case Und:
 					assgnAddrs[i] = p.undecidedIsDecided(ctx.assgns[i], outType)
 				}
 			}
 			for i, inType := range fun.In {
-				if argTypes[i] != btUndecided {
+				if argTypes[i] != Und {
 					continue
 				}
 				argAddrs[i] = p.undecidedIsDecided(ctx.args[i], inType)
@@ -290,7 +306,7 @@ func (p *Parser) newOrGetUndecidedAddr(id string) int {
 	if !ok {
 		p.undecidedAddrIndex -= 1
 		p.IDInfo[id] = Info{
-			Type: btUndecided,
+			Type: Und,
 			Addresses: []Address{
 				{Line: p.line, Index: p.undecidedAddrIndex},
 			},
@@ -312,7 +328,7 @@ func (p *Parser) undecidedAddDependency(id, dependentId string) {
 
 func (p *Parser) undecidedIsDecided(id string, typ baseType) int {
 	undecided, ok := p.IDInfo[id]
-	if !ok || undecided.Type != btUndecided {
+	if !ok || undecided.Type != Und {
 		return -1
 	}
 	undecided.Type = typ
@@ -325,7 +341,7 @@ func (p *Parser) undecidedIsDecided(id string, typ baseType) int {
 	var latestAddr int
 	for i, addr := range undecided.Addresses {
 		latestAddr = p.newAlloc(id, typ)
-		if inputParam, ok := p.InParams[id]; ok && inputParam.Type == btUndecided {
+		if inputParam, ok := p.InParams[id]; ok && inputParam.Type == Und {
 			inputParam.Type = typ
 			inputParam.Addr = latestAddr
 			p.InParams[id] = inputParam
@@ -344,17 +360,17 @@ func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
 	var addr int
 	typ := rawToType(raw)
 	switch typ {
-	case btStr:
+	case Str:
 		addr = len(p.bc.Strs)
 		p.bc.Strs = append(p.bc.Strs, raw[1:len(raw)-1])
-	case btInt:
+	case Int:
 		convInt, err := strconv.Atoi(raw)
 		if err != nil {
 			panic("failed to convert int '" + raw + "' even though it was parsed as an int: " + err.Error())
 		}
 		addr = len(p.bc.Ints)
 		p.bc.Ints = append(p.bc.Ints, convInt)
-	case btBool:
+	case Bool:
 		addr = len(p.bc.Bools)
 		p.bc.Bools = append(p.bc.Bools, raw == "True")
 	}
@@ -368,11 +384,11 @@ func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
 // TODO: handle copy instructions for undecided type
 func (p *Parser) copyFuncInstructionForType(typ baseType) int {
 	switch typ {
-	case btInt:
+	case Int:
 		return iopIntCopy
-	case btStr:
+	case Str:
 		return iopStrCopy
-	case btBool:
+	case Bool:
 		return iopBoolCopy
 	}
 	panic("type has no copy instruction: " + strconv.Itoa(int(typ)))
@@ -381,19 +397,20 @@ func (p *Parser) copyFuncInstructionForType(typ baseType) int {
 func (p *Parser) newAlloc(id string, typ baseType) int {
 	var addr int
 	switch typ {
-	case btInt:
+	case Int:
 		addr = len(p.bc.Ints)
 		p.bc.Ints = append(p.bc.Ints, 0)
-	case btStr:
+	case Str:
 		addr = len(p.bc.Strs)
 		p.bc.Strs = append(p.bc.Strs, "")
-	case btBool:
+	case Bool:
 		addr = len(p.bc.Bools)
 		p.bc.Bools = append(p.bc.Bools, false)
-	case btUndecided:
+	case Und:
 		addr = p.newOrGetUndecidedAddr(id) // TODO
-	case btAddr:
-		addr = len(p.bc.OpAddrs)
+	case Addr:
+		addr = len(p.bc.Ints)
+		p.bc.Ints = append(p.bc.Ints, len(p.bc.OpAddrs))
 	}
 	p.IDInfo[id] = Info{
 		Type:      typ,
@@ -404,11 +421,11 @@ func (p *Parser) newAlloc(id string, typ baseType) int {
 
 func (p *Parser) copyToExisting(fromAddr, toAddr int, typ baseType) {
 	switch typ {
-	case btStr:
+	case Str:
 		p.bc.Strs[toAddr] = p.bc.Strs[fromAddr]
-	case btInt:
+	case Int:
 		p.bc.Ints[toAddr] = p.bc.Ints[fromAddr]
-	case btBool:
+	case Bool:
 		p.bc.Bools[toAddr] = p.bc.Bools[fromAddr]
 	}
 }
@@ -421,17 +438,17 @@ func (p *Parser) typeAndAddrOfID(id string) (baseType, int, bool) {
 	if info, ok := p.IDInfo[id]; ok {
 		return info.Type, info.Addresses[len(info.Addresses)-1].Index, ok
 	}
-	return btUndecided, -1, false
+	return Und, -1, false
 }
 
 func rawToType(raw string) baseType {
 	switch {
 	case isString(raw):
-		return btStr
+		return Str
 	case isInt(raw):
-		return btInt
+		return Int
 	case isBool(raw):
-		return btBool
+		return Bool
 	}
 	panic("no type for: " + raw)
 }
