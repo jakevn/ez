@@ -6,14 +6,22 @@ import (
 )
 
 func init() {
-	syms := make([]string, len(baselib))
-	for sym, _ := range baselib {
+	var syms []string
+	for sym := range baselib {
 		syms = append(syms, sym)
 	}
 	sort.Strings(syms)
 	for _, sym := range syms {
 		symFuncs := baselib[sym]
+		if len(symFuncs) == 0 {
+			panic("symbol with no associated functions: " + sym)
+		}
+		paramInCount := len(symFuncs[0].In)
+		paramOutCount := len(symFuncs[0].Out)
 		for i, fun := range symFuncs {
+			if len(fun.In) != paramInCount || len(fun.Out) != paramOutCount {
+				panic("functions associated with symbols must have identical parameter counts. invalid: " + sym)
+			}
 			fun.addr = len(funcAddrs)
 			funcAddrs = append(funcAddrs, fun.F)
 			symFuncs[i] = fun
@@ -53,16 +61,16 @@ var funcAddrs = []func(*Bytecode){
 var baselib = map[string][]Func{
 	"+": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btInt},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Int},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] + p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
 			},
 		},
 		{
-			In:  []baseType{btStr, btStr},
-			Out: []baseType{btStr},
+			In:  []baseType{Str, Str},
+			Out: []baseType{Str},
 			F: func(p *Bytecode) {
 				p.Strs[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] + p.Strs[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -71,8 +79,8 @@ var baselib = map[string][]Func{
 	},
 	"*": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btInt},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Int},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] * p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -81,8 +89,8 @@ var baselib = map[string][]Func{
 	},
 	"%": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btInt},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Int},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] % p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -91,8 +99,8 @@ var baselib = map[string][]Func{
 	},
 	"/": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btInt},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Int},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] / p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -101,8 +109,8 @@ var baselib = map[string][]Func{
 	},
 	"-": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btInt},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Int},
 			F: func(p *Bytecode) {
 				p.Ints[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] - p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -111,8 +119,8 @@ var baselib = map[string][]Func{
 	},
 	">": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] > p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -121,8 +129,8 @@ var baselib = map[string][]Func{
 	},
 	"<": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] < p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -131,8 +139,8 @@ var baselib = map[string][]Func{
 	},
 	">=": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] >= p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -141,8 +149,8 @@ var baselib = map[string][]Func{
 	},
 	"<=": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] <= p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -151,16 +159,16 @@ var baselib = map[string][]Func{
 	},
 	"==": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] == p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
 			},
 		},
 		{
-			In:  []baseType{btStr, btStr},
-			Out: []baseType{btBool},
+			In:  []baseType{Str, Str},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] == p.Strs[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -169,16 +177,16 @@ var baselib = map[string][]Func{
 	},
 	"!=": {
 		{
-			In:  []baseType{btInt, btInt},
-			Out: []baseType{btBool},
+			In:  []baseType{Int, Int},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Ints[p.OpAddrs[p.pos+1]] != p.Ints[p.OpAddrs[p.pos+2]]
 				p.pos += 4
 			},
 		},
 		{
-			In:  []baseType{btStr, btStr},
-			Out: []baseType{btBool},
+			In:  []baseType{Str, Str},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Strs[p.OpAddrs[p.pos+1]] != p.Strs[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -187,8 +195,8 @@ var baselib = map[string][]Func{
 	},
 	"&&": {
 		{
-			In:  []baseType{btBool, btBool},
-			Out: []baseType{btBool},
+			In:  []baseType{Bool, Bool},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Bools[p.OpAddrs[p.pos+1]] && p.Bools[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -197,8 +205,8 @@ var baselib = map[string][]Func{
 	},
 	"||": {
 		{
-			In:  []baseType{btBool, btBool},
-			Out: []baseType{btBool},
+			In:  []baseType{Bool, Bool},
+			Out: []baseType{Bool},
 			F: func(p *Bytecode) {
 				p.Bools[p.OpAddrs[p.pos+3]] = p.Bools[p.OpAddrs[p.pos+1]] || p.Bools[p.OpAddrs[p.pos+2]]
 				p.pos += 4
@@ -207,24 +215,44 @@ var baselib = map[string][]Func{
 	},
 	"Print": {
 		{
-			In: []baseType{btStr},
+			In: []baseType{Str},
 			F: func(p *Bytecode) {
 				log.Println(p.Strs[p.OpAddrs[p.pos+1]])
 				p.pos += 2
 			},
 		},
 		{
-			In: []baseType{btInt},
+			In: []baseType{Int},
 			F: func(p *Bytecode) {
 				log.Println(p.Ints[p.OpAddrs[p.pos+1]])
 				p.pos += 2
 			},
 		},
 		{
-			In: []baseType{btBool},
+			In: []baseType{Bool},
 			F: func(p *Bytecode) {
 				log.Println(p.Bools[p.OpAddrs[p.pos+1]])
 				p.pos += 2
+			},
+		},
+	},
+	"If": {
+		{
+			In: []baseType{Bool},
+			F: func(p *Bytecode) {
+				if p.Bools[p.OpAddrs[p.pos+1]] {
+					p.pos += 3
+				} else {
+					p.pos = p.OpAddrs[p.pos+2]
+				}
+			},
+		},
+	},
+	"Goto": {
+		{
+			In: []baseType{Addr},
+			F: func(p *Bytecode) {
+				p.pos = p.Ints[p.OpAddrs[p.pos+1]]
 			},
 		},
 	},
