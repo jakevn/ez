@@ -91,7 +91,7 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 		var injectEndAddrAt int
 		fields := strings.Fields(lineText)
 		for i, field := range fields {
-			if strings.HasPrefix(field, "#") {
+			if !buildingStr && strings.HasPrefix(field, "#") {
 				break
 			}
 			if i == 0 && isLabel(field) {
@@ -417,17 +417,6 @@ func (p *Parser) newAlloc(id string, typ baseType) int {
 		Addresses: []Address{{Index: addr, Line: p.line}},
 	}
 	return addr
-}
-
-func (p *Parser) copyToExisting(fromAddr, toAddr int, typ baseType) {
-	switch typ {
-	case Str:
-		p.bc.Strs[toAddr] = p.bc.Strs[fromAddr]
-	case Int:
-		p.bc.Ints[toAddr] = p.bc.Ints[fromAddr]
-	case Bool:
-		p.bc.Bools[toAddr] = p.bc.Bools[fromAddr]
-	}
 }
 
 func (p *Parser) parsingErr(errMsg string) error {

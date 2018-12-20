@@ -1,0 +1,8 @@
+input = 10000000
+
+~redo
+input = input - 1
+gtTwo = input > 2
+If gtTwo Goto ~redo
+
+Print input

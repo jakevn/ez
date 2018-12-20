@@ -44,15 +44,15 @@ const (
 )
 
 var funcAddrs = []func(*Bytecode){
-	func(p *Bytecode) {
+	func(p *Bytecode) { // iopIntCopy
 		p.Ints[p.OpAddrs[p.pos+2]] = p.Ints[p.OpAddrs[p.pos+1]]
 		p.pos += 3
 	},
-	func(p *Bytecode) {
+	func(p *Bytecode) { // iopStrCopy
 		p.Strs[p.OpAddrs[p.pos+2]] = p.Strs[p.OpAddrs[p.pos+1]]
 		p.pos += 3
 	},
-	func(p *Bytecode) {
+	func(p *Bytecode) { // iopBoolCopy
 		p.Bools[p.OpAddrs[p.pos+2]] = p.Bools[p.OpAddrs[p.pos+1]]
 		p.pos += 3
 	},
