@@ -23,6 +23,10 @@ const (
 	Bool
 	Any
 	Addr
+	ArrUnd
+	ArrInt
+	ArrStr
+	ArrBool
 )
 
 type Parser struct {
@@ -55,6 +59,7 @@ type expressionCtx struct {
 	assgns []string
 	args   []string
 	op     string
+	array  bool
 }
 
 func Parse(reader io.Reader) (Bytecode, error) {
@@ -101,6 +106,21 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 				}
 				break
 			}
+
+			if strings.HasPrefix(field, "[") {
+				if baseExprCtx.array == true {
+					return p.bc, p.parsingErr("errant '[' in array declaration")
+				}
+				baseExprCtx.array = true
+				field = field[1:]
+				if len(field) == 1 {
+					continue
+				}
+			}
+			if baseExprCtx.array && strings.HasSuffix(field, "]") {
+				field = field[:len(field)-2]
+			}
+
 			switch {
 			case buildingStr:
 				buildStr += " " + field
@@ -134,7 +154,7 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 				} else {
 					baseExprCtx.args = append(baseExprCtx.args, field)
 				}
-				if baseExprCtx.op == "If" {
+				if baseExprCtx.op == "if" {
 					if err := p.compileExpression(baseExprCtx); err != nil {
 						return p.bc, err
 					}
@@ -160,6 +180,26 @@ func (p *Parser) parseInternal(reader io.Reader) (Bytecode, error) {
 
 func (p *Parser) compileExpression(ctx expressionCtx) error {
 	switch {
+	case ctx.array: // Array
+		//if len(ctx.assgns) != 1 {
+		//	return p.parsingErr("array must be assigned to a single identifier")
+		//}
+		//targetTyp, targetAddr, targetFound := p.typeAndAddrOfID(ctx.assgns[0])
+		//prevTyp := -1
+		//firstIsUnd := false
+		//for i, arg := range ctx.args {
+		//	if isIdentifier(arg) {
+		//		typ, addr, found := p.typeAndAddrOfID(arg)
+		//		if !found {
+		//			return p.parsingErr("reference to uninitialized identifier: " + arg)
+		//		}
+		//	}
+		//	p.typeAndAddrOfID(arg)
+		//	if i == 0 {
+		//		continue
+		//	}
+		//}
+
 	case ctx.op == "" && len(ctx.args) > 0 && len(ctx.assgns) > 0:
 		if len(ctx.args) > 1 || len(ctx.assgns) > 1 {
 			return p.parsingErr("can only assign one expression to one argument")
@@ -372,7 +412,7 @@ func (p *Parser) newAllocInitialize(id, raw string) (int, baseType) {
 		p.bc.Ints = append(p.bc.Ints, convInt)
 	case Bool:
 		addr = len(p.bc.Bools)
-		p.bc.Bools = append(p.bc.Bools, raw == "True")
+		p.bc.Bools = append(p.bc.Bools, raw == "true")
 	}
 	p.IDInfo[id] = Info{
 		Type:      typ,
@@ -420,7 +460,7 @@ func (p *Parser) newAlloc(id string, typ baseType) int {
 }
 
 func (p *Parser) parsingErr(errMsg string) error {
-	return errors.New("ERROR - Line " + strconv.Itoa(int(p.line)) + ": " + errMsg)
+	return errors.New("ERROR - line " + strconv.Itoa(int(p.line)) + ": " + errMsg)
 }
 
 func (p *Parser) typeAndAddrOfID(id string) (baseType, int, bool) {
@@ -464,6 +504,9 @@ func isInt(str string) bool {
 }
 
 func isIdentifier(str string) bool {
+	if isFuncCall(str) {
+		return false
+	}
 	for i, r := range str {
 		if i == 0 {
 			if !unicode.IsLetter(r) || !unicode.IsLower(r) {
@@ -485,7 +528,7 @@ func isString(raw string) bool {
 }
 
 func isBool(str string) bool {
-	return str == "True" || str == "False"
+	return str == "true" || str == "false"
 }
 
 func isFuncCall(str string) bool {

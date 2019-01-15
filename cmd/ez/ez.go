@@ -1,11 +1,12 @@
 package main
 
 import (
-	"encoding/gob"
 	"io"
 	"log"
 	"os"
 	"strings"
+
+	"encoding/json"
 
 	"github.com/jakevn/ez"
 )
@@ -20,7 +21,7 @@ func main() {
 	defer file.Close()
 
 	var bc ez.Bytecode
-	if strings.HasSuffix(filePath,".ezc") {
+	if strings.HasSuffix(filePath, ".ezc") {
 		bc, err = decode(file)
 	} else {
 		bc, err = ez.Parse(file)
@@ -28,6 +29,7 @@ func main() {
 			if err := saveByteCode(bc); err != nil {
 				log.Fatal(err)
 			}
+			return
 		}
 	}
 	if err != nil {
@@ -46,12 +48,12 @@ func saveByteCode(bc ez.Bytecode) error {
 		return err
 	}
 	defer file.Close()
-	return gob.NewEncoder(file).Encode(bc)
+	return json.NewEncoder(file).Encode(bc)
 }
 
 func decode(reader io.Reader) (ez.Bytecode, error) {
 	var ezb ez.Bytecode
-	return ezb, gob.NewDecoder(reader).Decode(&ezb)
+	return ezb, json.NewDecoder(reader).Decode(&ezb)
 }
 
 func hasFlag(flag string) bool {
